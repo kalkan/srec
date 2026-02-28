@@ -1,4 +1,4 @@
-/* global L, satellite */
+import * as satellite from "https://cdn.jsdelivr.net/npm/satellite.js@5.0.1/dist/satellite.es.js";
 
 const NORAD_ID = 63229;
 const LOCAL_TLE_URL = "./tle.txt"; // same-origin => no CORS
@@ -345,4 +345,5 @@ btnCalcPasses.addEventListener("click", async () => {
 });
 
 // initial
+
 btnDraw.click();
