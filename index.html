@@ -3,27 +3,32 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>SpaceEye-T (NORAD 63229) – Ground Track</title>
+  <title>SpaceEye-T1 (63229) – Track + Passes</title>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <style>
     html, body, #map { height: 100%; margin: 0; }
     .panel{
       position:absolute; top:12px; left:12px; z-index:999;
-      background:#fff; padding:10px 12px; border-radius:10px;
-      box-shadow:0 6px 18px rgba(0,0,0,.15);
+      background:#fff; padding:10px 12px; border-radius:12px;
+      box-shadow:0 8px 22px rgba(0,0,0,.18);
       font:14px/1.25 system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      min-width: 280px;
+      width: 340px;
+      max-height: calc(100% - 24px);
+      overflow:auto;
     }
     .row{ display:flex; gap:8px; align-items:center; margin-top:8px; }
-    label{ min-width: 92px; color:#333; }
+    label{ min-width: 98px; color:#333; }
     input, select, button{
-      font:inherit; padding:6px 8px; border:1px solid #ddd; border-radius:8px;
+      font:inherit; padding:6px 8px; border:1px solid #ddd; border-radius:10px;
     }
     button{ cursor:pointer; }
-    .small{ color:#666; font-size:12px; margin-top:8px; }
-    .kv{ font-size:12px; color:#111; margin-top:8px; }
-    .kv div{ margin-top:2px; }
+    .small{ color:#666; font-size:12px; margin-top:10px; }
+    .kv{ font-size:12px; color:#111; margin-top:10px; }
+    table{ width:100%; border-collapse:collapse; font-size:12px; margin-top:10px; }
+    th, td{ border-bottom:1px solid #eee; padding:6px 4px; text-align:left; vertical-align:top; }
+    th{ position:sticky; top:0; background:#fff; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   </style>
 </head>
 <body>
@@ -48,191 +53,62 @@
     </div>
 
     <div class="row">
-      <button id="refresh">TLE çek + çiz</button>
-      <button id="live">Canlı takip</button>
+      <button id="draw">Çiz</button>
+      <button id="live">Canlı</button>
       <button id="stop" disabled>Durdur</button>
     </div>
 
-    <div class="small">
-      Basemap: © OpenStreetMap katkıcıları • Propagator: SGP4 (satellite.js)
+    <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
+
+    <div><b>Sonraki geçişler (AOS/LOS)</b></div>
+
+    <div class="row">
+      <label>Şehir (lat)</label>
+      <input id="olat" type="number" step="0.0001" value="39.9334" />
+    </div>
+    <div class="row">
+      <label>Şehir (lon)</label>
+      <input id="olon" type="number" step="0.0001" value="32.8597" />
+    </div>
+    <div class="row">
+      <label>Yükseklik</label>
+      <input id="oalt" type="number" step="1" value="0" />
+      <span class="small">m</span>
+    </div>
+
+    <div class="row">
+      <label>N geçiş</label>
+      <select id="npasses">
+        <option value="5" selected>5</option>
+        <option value="10">10</option>
+        <option value="15">15</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label>Arama</label>
+      <select id="searchHours">
+        <option value="24">24 saat</option>
+        <option value="48" selected>48 saat</option>
+        <option value="72">72 saat</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <button id="calcPasses">Geçişleri bul</button>
     </div>
 
     <div class="kv" id="status">Hazır.</div>
+
+    <div id="passesWrap"></div>
+
+    <div class="small">
+      Basemap: © OpenStreetMap • Track/Pass: satellite.js (SGP4) • TLE kaynağı: repo’daki <span class="mono">tle.txt</span>
+    </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/satellite.js@5.0.1/dist/satellite.min.js"></script>
-
-  <script>
-    // ====== CONFIG ======
-    const NORAD_ID = 63229;
-    const TLE_URL  = `https://celestrak.org/NORAD/elements/gp.php?CATNR=${NORAD_ID}&FORMAT=TLE`; // CelesTrak GP query :contentReference[oaicite:2]{index=2}
-
-    // ====== MAP ======
-    const map = L.map('map', { worldCopyJump:true }).setView([39, 35], 3);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
-
-    const nowMarker = L.circleMarker([0,0], { radius:6 }).addTo(map);
-    let trackLine = L.polyline([], { weight: 2 }).addTo(map);
-
-    // ====== UI ======
-    const dtEl = document.getElementById('dt');
-    const hoursEl = document.getElementById('hours');
-    const statusEl = document.getElementById('status');
-    const btnRefresh = document.getElementById('refresh');
-    const btnLive = document.getElementById('live');
-    const btnStop = document.getElementById('stop');
-
-    // set default datetime-local = now (local)
-    function pad(n){ return String(n).padStart(2,'0'); }
-    function toLocalInputValue(d){
-      const yy=d.getFullYear(), mm=pad(d.getMonth()+1), dd=pad(d.getDate());
-      const hh=pad(d.getHours()), mi=pad(d.getMinutes());
-      return `${yy}-${mm}-${dd}T${hh}:${mi}`;
-    }
-    dtEl.value = toLocalInputValue(new Date());
-
-    // ====== TLE FETCH + PARSE ======
-    async function fetchTLE(){
-      statusEl.textContent = "TLE indiriliyor…";
-      const res = await fetch(TLE_URL, { cache: "no-store" });
-      if(!res.ok) throw new Error(`TLE HTTP ${res.status}`);
-      const txt = (await res.text()).trim();
-      const lines = txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-      // CelesTrak TLE output usually: NAME + Line1 + Line2 (3 lines)
-      const name = lines[0];
-      const l1 = lines[1];
-      const l2 = lines[2];
-      if(!l1 || !l2) throw new Error("TLE parse edilemedi (beklenen 3 satır yok).");
-      return { name, l1, l2 };
-    }
-
-    // ====== PROPAGATION HELPERS ======
-    function groundTrackPoints(satrec, startDate, hoursForward){
-      const pts = [];
-      const stepSec = 30; // 30s step
-      const totalSec = hoursForward * 3600;
-      for(let t=0; t<=totalSec; t+=stepSec){
-        const d = new Date(startDate.getTime() + t*1000);
-        const pv = satellite.propagate(satrec, d);
-        if(!pv.position) continue;
-
-        const gmst = satellite.gstime(d);
-        const gd = satellite.eciToGeodetic(pv.position, gmst);
-
-        let lat = satellite.degreesLat(gd.latitude);
-        let lon = satellite.degreesLong(gd.longitude);
-        const altKm = gd.height;
-
-        // normalize lon to [-180, 180]
-        if (lon > 180) lon -= 360;
-        if (lon < -180) lon += 360;
-
-        pts.push({ lat, lon, altKm, date: d });
-      }
-      return pts;
-    }
-
-    function setMarkerAndPopup(p, name){
-      nowMarker.setLatLng([p.lat, p.lon]);
-      nowMarker.bindPopup(
-        `<b>${name}</b><br>` +
-        `${p.date.toISOString()}<br>` +
-        `Lat: ${p.lat.toFixed(4)}°, Lon: ${p.lon.toFixed(4)}°<br>` +
-        `Alt: ${p.altKm.toFixed(1)} km`
-      );
-    }
-
-    function renderTrack(points){
-      trackLine.setLatLngs(points.map(p => [p.lat, p.lon]));
-      if(points.length){
-        setMarkerAndPopup(points[0], currentName || "Satellite");
-        map.panTo([points[0].lat, points[0].lon], { animate:false });
-      }
-      statusEl.innerHTML =
-        `<div><b>Track</b>: ${points.length} nokta</div>` +
-        `<div>Başlangıç: ${points[0]?.date?.toISOString() || "-"}</div>` +
-        `<div>Bitiş: ${points[points.length-1]?.date?.toISOString() || "-"}</div>`;
-    }
-
-    // ====== MAIN DRAW ======
-    let currentSatrec = null;
-    let currentName = null;
-    let liveTimer = null;
-
-    async function draw(){
-      const start = new Date(dtEl.value);
-      const hoursForward = parseInt(hoursEl.value, 10);
-
-      const { name, l1, l2 } = await fetchTLE();
-      currentName = name;
-      currentSatrec = satellite.twoline2satrec(l1, l2);
-
-      const pts = groundTrackPoints(currentSatrec, start, hoursForward);
-      renderTrack(pts);
-    }
-
-    // ====== LIVE ======
-    function startLive(){
-      if(!currentSatrec){
-        statusEl.textContent = "Önce TLE çekmelisin (TLE çek + çiz).";
-        return;
-      }
-      btnStop.disabled = false;
-      btnLive.disabled = true;
-      dtEl.disabled = true;
-      hoursEl.disabled = true;
-
-      liveTimer = setInterval(() => {
-        const d = new Date();
-        const pv = satellite.propagate(currentSatrec, d);
-        if(!pv.position) return;
-        const gmst = satellite.gstime(d);
-        const gd = satellite.eciToGeodetic(pv.position, gmst);
-        const p = {
-          lat: satellite.degreesLat(gd.latitude),
-          lon: satellite.degreesLong(gd.longitude),
-          altKm: gd.height,
-          date: d
-        };
-        if (p.lon > 180) p.lon -= 360;
-        if (p.lon < -180) p.lon += 360;
-
-        nowMarker.setLatLng([p.lat, p.lon]);
-      }, 1000);
-
-      statusEl.textContent = "Canlı takip açık (1 sn güncelleme).";
-    }
-
-    function stopLive(){
-      clearInterval(liveTimer);
-      liveTimer = null;
-      btnStop.disabled = true;
-      btnLive.disabled = false;
-      dtEl.disabled = false;
-      hoursEl.disabled = false;
-      statusEl.textContent = "Canlı takip durduruldu.";
-    }
-
-    // ====== EVENTS ======
-    btnRefresh.addEventListener('click', async () => {
-      try { await draw(); }
-      catch(e){
-        statusEl.textContent =
-          "Hata: " + e.message +
-          " (CORS olasıysa aşağıdaki GitHub Action çözümünü kullan.)";
-        console.error(e);
-      }
-    });
-
-    btnLive.addEventListener('click', startLive);
-    btnStop.addEventListener('click', stopLive);
-
-    // initial draw
-    btnRefresh.click();
-  </script>
+  <script src="./app.js"></script>
 </body>
 </html>
