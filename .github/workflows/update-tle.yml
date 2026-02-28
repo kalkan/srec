@@ -1,0 +1,37 @@
+name: Update TLE (SpaceEye-T1)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"   # 6 saatte bir (istersen DAILY yaparız)
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch TLE from CelesTrak
+        run: |
+          set -e
+          URL="https://celestrak.org/NORAD/elements/gp.php?CATNR=63229&FORMAT=TLE"
+          curl -fsSL "$URL" -o tle.txt
+          echo "Fetched:"
+          head -n 3 tle.txt
+
+      - name: Commit if changed
+        run: |
+          set -e
+          git config user.name "tle-bot"
+          git config user.email "tle-bot@users.noreply.github.com"
+          if git diff --quiet -- tle.txt; then
+            echo "No changes."
+            exit 0
+          fi
+          git add tle.txt
+          git commit -m "Update TLE for SpaceEye-T1"
+          git push
